@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beat-Synced Video Previewer</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Cropper.js for image/video cropping -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
+    
+    <!-- FFmpeg.wasm for video processing -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono&family=Lobster&family=Source+Sans+Pro&family=Oswald&family=Montserrat&family=Playfair+Display&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .video-aspect-9-16 {
+            position: relative;
+            width: 100%;
+            max-width: 360px;
+            margin: auto;
+            padding-bottom: 177.77%;
+            background-color: #000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        .video-aspect-9-16 .media-element,
+        .video-aspect-9-16 video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .video-aspect-9-16 .media-element { display: none; }
+        .video-aspect-9-16 .media-element.active { display: block; }
+        #lyrics-overlay {
+            position: absolute;
+            left: 50%;
+            top: 90%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.7);
+            pointer-events: none;
+            padding: 0 1rem;
+            z-index: 10;
+            transition: all 0.2s;
+        }
+        .cropper-modal-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.8); display: flex;
+            align-items: center; justify-content: center; z-index: 1000;
+        }
+        .cropper-content {
+            background: white; padding: 20px; border-radius: 8px;
+            max-width: 90vw; max-height: 90vh;
+        }
+        #cropper-image { max-width: 100%; max-height: 70vh; }
+        input[type="file"]::file-selector-button {
+            background-color: #4f46e5; color: white; border: none;
+            padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        input[type="file"]::file-selector-button:hover { background-color: #4338ca; }
+        .dragging { opacity: 0.5; background: #c7d2fe; }
+        .drag-over { border-top: 2px solid #4f46e5; }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8 max-w-5xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-indigo-600 dark:text-indigo-400">Beat-Synced Video Previewer</h1>
+            <p class="mt-2 text-gray-600 dark:text-gray-400">Upload media, set durations, crop to 9:16, add lyrics, and play your video.</p>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Left Column: Controls -->
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 space-y-6 h-fit">
+                <!-- Step 1: Upload Media -->
+                <div>
+                    <label class="block text-lg font-medium mb-2">1. Upload Media</label>
+                    <input type="file" id="media-upload" multiple accept="image/*,video/*" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 dark:file:bg-indigo-900 file:text-indigo-700 dark:file:text-indigo-300 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-800">
+                </div>
+                
+                <!-- Media List View -->
+                <div id="media-timeline" class="space-y-3">
+                    <p class="text-gray-500 dark:text-gray-400">Your media will appear here...</p>
+                </div>
+
+                <!-- Step 2: Set BPM -->
+                <div>
+                    <label for="bpm-input" class="block text-lg font-medium mb-2">2. Enter Song BPM</label>
+                    <input type="number" id="bpm-input" value="120" min="1" class="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <!-- Step 3: Add Audio -->
+                <div>
+                    <label for="audio-upload" class="block text-lg font-medium mb-2">3. Add Audio</label>
+                    <input type="file" id="audio-upload" accept="audio/*" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 dark:file:bg-indigo-900 file:text-indigo-700 dark:file:text-indigo-300 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-800">
+                    <audio id="audio-player" class="mt-4 w-full" controls></audio>
+                </div>
+
+                <!-- Step 4: Add Lyrics -->
+                <div>
+                    <label class="block text-lg font-medium mb-2">4. Upload Lyrics</label>
+                    <div class="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-3">
+                        <label class="block text-sm font-medium text-gray-600 dark:text-gray-300">Upload LRC File</label>
+                        <input type="file" id="lrc-upload" accept=".lrc" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 dark:file:bg-indigo-900 file:text-indigo-700 dark:file:text-indigo-300 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-800">
+                    </div>
+                    <div id="lyrics-timeline" class="mt-3 space-y-2 max-h-48 overflow-y-auto"></div>
+                </div>
+
+                <!-- Step 5: Lyrics Style -->
+                <div>
+                    <label class="block text-lg font-medium mb-2">5. Lyrics Style</label>
+                    <div class="space-y-3">
+                         <div>
+                            <label for="font-select" class="block text-sm font-medium">Font Family</label>
+                            <select id="font-select" class="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
+                                <option value="'Inter', sans-serif" selected>Inter</option>
+                                <option value="'Source Sans Pro', sans-serif">Source Sans Pro</option>
+                                <option value="'Roboto Mono', monospace">Roboto Mono</option>
+                                <option value="'Lobster', cursive">Lobster</option>
+                                <option value="'Oswald', sans-serif">Oswald</option>
+                                <option value="'Montserrat', sans-serif">Montserrat</option>
+                                <option value="'Playfair Display', serif">Playfair Display</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="font-size-slider" class="block text-sm font-medium">Font Size (<span id="font-size-value">28</span>px)</label>
+                            <input type="range" id="font-size-slider" min="12" max="72" value="28" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                        </div>
+                        <div>
+                            <label for="placement-y-slider" class="block text-sm font-medium">Vertical Position (<span id="placement-y-value">90</span>%)</label>
+                            <input type="range" id="placement-y-slider" min="0" max="100" value="90" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                        </div>
+                         <div>
+                            <label for="placement-x-slider" class="block text-sm font-medium">Horizontal Position (<span id="placement-x-value">50</span>%)</label>
+                            <input type="range" id="placement-x-slider" min="0" max="100" value="50" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                        </div>
+                        <div class="flex items-center">
+                            <input id="text-shadow-toggle" type="checkbox" checked class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                            <label for="text-shadow-toggle" class="ml-2 block text-sm text-gray-900 dark:text-gray-300">Text Shadow</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Preview -->
+            <div id="video-output" class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+                <h2 class="text-2xl font-bold mb-4 text-center">Video Preview</h2>
+                <div class="relative max-w-[360px] mx-auto">
+                    <div id="video-container" class="video-aspect-9-16">
+                        <!-- Media elements will be dynamically added here -->
+                    </div>
+                    <div id="lyrics-overlay"></div>
+                </div>
+                <div class="text-center mt-4 space-y-3">
+                     <button id="play-btn" class="w-full sm:w-auto bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-8 rounded-lg shadow-md transition-transform transform hover:scale-105 disabled:bg-gray-400">
+                        Preview Video
+                    </button>
+                     <button id="render-btn" class="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg shadow-md transition-transform transform hover:scale-105 disabled:bg-gray-400">
+                        Render & Download
+                    </button>
+                </div>
+                 <div id="message-box" class="mt-4 text-center text-sm text-gray-500 dark:text-gray-400 p-3">
+                    Set up your media and click "Play Video" to see the result.
+                </div>
+                <div id="progress-container" class="mt-4 hidden">
+                    <p id="progress-message" class="text-sm mb-1">Loading FFmpeg...</p>
+                    <div class="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2.5">
+                        <div id="progress-bar" class="bg-indigo-500 h-2.5 rounded-full" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Cropper Modal -->
+    <div id="cropper-modal" class="cropper-modal-container hidden">
+        <div class="cropper-content">
+            <h3 class="text-xl font-bold mb-4">Crop Media (9:16)</h3>
+            <div>
+                <img id="cropper-image" src="">
+            </div>
+            <div class="mt-4 flex justify-end space-x-3">
+                <button id="cancel-crop-btn" class="px-4 py-2 bg-gray-300 rounded">Cancel</button>
+                <button id="save-crop-btn" class="px-4 py-2 bg-indigo-600 text-white rounded">Save Crop</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Destructure FFmpeg ---
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        let ffmpeg;
+
+        // --- DOM Element References ---
+        const mediaUpload = document.getElementById('media-upload');
+        const mediaTimeline = document.getElementById('media-timeline');
+        const bpmInput = document.getElementById('bpm-input');
+        const audioUpload = document.getElementById('audio-upload');
+        const audioPlayer = document.getElementById('audio-player');
+        const playBtn = document.getElementById('play-btn');
+        const renderBtn = document.getElementById('render-btn');
+        const videoContainer = document.getElementById('video-container');
+        const messageBox = document.getElementById('message-box');
+        
+        // Lyrics UI
+        const lrcUpload = document.getElementById('lrc-upload');
+        const lyricsTimeline = document.getElementById('lyrics-timeline');
+        const lyricsOverlay = document.getElementById('lyrics-overlay');
+        const fontSelect = document.getElementById('font-select');
+        const fontSizeSlider = document.getElementById('font-size-slider');
+        const fontSizeValue = document.getElementById('font-size-value');
+        const placementYSlider = document.getElementById('placement-y-slider');
+        const placementYValue = document.getElementById('placement-y-value');
+        const placementXSlider = document.getElementById('placement-x-slider');
+        const placementXValue = document.getElementById('placement-x-value');
+        const textShadowToggle = document.getElementById('text-shadow-toggle');
+
+        // Cropper Modal
+        const cropperModal = document.getElementById('cropper-modal');
+        const cropperImage = document.getElementById('cropper-image');
+        const saveCropBtn = document.getElementById('save-crop-btn');
+        const cancelCropBtn = document.getElementById('cancel-crop-btn');
+        
+        // Progress Bar
+        const progressContainer = document.getElementById('progress-container');
+        const progressMessage = document.getElementById('progress-message');
+        const progressBar = document.getElementById('progress-bar');
+
+        // --- State Variables ---
+        let mediaItems = []; // { id, file, type, duration, cropData, url, naturalDuration }
+        let lyrics = []; // { id, text, time (sec), color }
+        let audioFile = null;
+        let cropper = null;
+        let currentCropItemId = null;
+        let animationFrameId = null;
+        let draggedItemId = null;
+
+        // --- Event Listeners ---
+        mediaUpload.addEventListener('change', handleMediaUpload);
+        audioUpload.addEventListener('change', handleAudioUpload);
+        lrcUpload.addEventListener('change', handleLrcUpload);
+        playBtn.addEventListener('click', playVideo);
+        renderBtn.addEventListener('click', renderAndDownload);
+        cancelCropBtn.addEventListener('click', () => cropperModal.classList.add('hidden'));
+        saveCropBtn.addEventListener('click', saveCropData);
+        fontSelect.addEventListener('input', () => lyricsOverlay.style.fontFamily = fontSelect.value);
+        fontSizeSlider.addEventListener('input', () => {
+            fontSizeValue.textContent = fontSizeSlider.value;
+            lyricsOverlay.style.fontSize = `${fontSizeSlider.value}px`;
+        });
+        placementYSlider.addEventListener('input', () => {
+            placementYValue.textContent = placementYSlider.value;
+            updateLyricPlacement();
+        });
+         placementXSlider.addEventListener('input', () => {
+            placementXValue.textContent = placementXSlider.value;
+            updateLyricPlacement();
+        });
+        textShadowToggle.addEventListener('change', () => {
+            lyricsOverlay.style.textShadow = textShadowToggle.checked ? '2px 2px 4px rgba(0,0,0,0.7)' : 'none';
+        });
+        bpmInput.addEventListener('change', updateMediaTimeline);
+
+
+        // --- FFmpeg Initialization ---
+        const initializeFFmpeg = async () => {
+            if (!ffmpeg || !ffmpeg.isLoaded()) {
+                ffmpeg = createFFmpeg({ 
+                    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.6/dist/ffmpeg-core.js',
+                    log: true,
+                    progress: ({ ratio }) => {
+                        if (ratio >= 0 && ratio <= 1) {
+                            progressMessage.innerText = `Rendering... (${Math.round(ratio * 100)}%)`;
+                            progressBar.style.width = `${ratio * 100}%`;
+                        }
+                    }
+                });
+                progressMessage.innerText = 'Loading FFmpeg core...';
+                progressBar.style.width = '0%';
+                progressContainer.classList.remove('hidden');
+                await ffmpeg.load();
+            }
+        };
+
+        // --- Functions ---
+        
+        async function handleMediaUpload(event) {
+            const files = Array.from(event.target.files);
+            for (const file of files) {
+                const id = `media-${Date.now()}-${Math.random()}`;
+                const type = file.type.startsWith('image') ? 'image' : 'video';
+                const url = URL.createObjectURL(file);
+                
+                const defaultDuration = type === 'image' ? 1 : 3;
+                let naturalDuration = null;
+                if (type === 'video') {
+                    naturalDuration = await getVideoDuration(file);
+                }
+
+                mediaItems.push({ id, file, type, duration: defaultDuration, cropData: null, url, naturalDuration });
+            }
+            updateMediaTimeline();
+        }
+        
+        function getVideoDuration(file) {
+            return new Promise((resolve) => {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.onloadedmetadata = () => {
+                    URL.revokeObjectURL(video.src);
+                    resolve(video.duration);
+                };
+                video.src = URL.createObjectURL(file);
+            });
+        }
+
+
+        function updateMediaTimeline() {
+            if (mediaItems.length === 0) {
+                mediaTimeline.innerHTML = '<p class="text-gray-500 dark:text-gray-400">Your media will appear here...</p>';
+                return;
+            }
+            mediaTimeline.innerHTML = '';
+            mediaItems.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'media-item-container flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg';
+                div.setAttribute('draggable', 'true');
+                div.dataset.id = item.id;
+
+                const thumbnail = item.type === 'image' 
+                    ? `<img src="${item.url}" class="w-10 h-10 object-cover rounded-md pointer-events-none">`
+                    : `<video src="${item.url}" class="w-10 h-10 object-cover rounded-md pointer-events-none" muted></video>`;
+                
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <svg class="w-5 h-5 text-gray-400 cursor-move drag-handle" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                        <span class="text-gray-500 pointer-events-none">${index + 1}</span>
+                        ${thumbnail}
+                        <span class="text-sm font-medium truncate w-32 pointer-events-none">${item.file.name}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                         <div class="flex items-center gap-1">
+                            <input type="number" data-id="${item.id}" value="${item.duration}" min="0.25" step="0.25" class="duration-input w-20 p-1 text-sm rounded-md bg-white dark:bg-gray-600 border border-gray-300 dark:border-gray-500">
+                            <span class="text-xs text-gray-500 dark:text-gray-400">Beats</span>
+                        </div>
+                        <button data-id="${item.id}" class="crop-btn text-sm bg-gray-200 dark:bg-gray-600 px-3 py-1 rounded-md hover:bg-gray-300">Crop</button>
+                        <button data-id="${item.id}" class="delete-media-btn text-red-500 hover:text-red-700 font-bold px-2">X</button>
+                    </div>
+                `;
+                mediaTimeline.appendChild(div);
+            });
+
+            addListViewEventListeners();
+        }
+        
+        function addListViewEventListeners() {
+            document.querySelectorAll('.duration-input').forEach(input => input.addEventListener('input', e => {
+                const id = e.target.dataset.id;
+                const duration = parseFloat(e.target.value);
+                const mediaItem = mediaItems.find(item => item.id === id);
+                if (mediaItem && duration > 0) {
+                    mediaItem.duration = duration;
+                }
+            }));
+
+            document.querySelectorAll('.crop-btn').forEach(btn => btn.addEventListener('click', e => openCropper(e.target.dataset.id)));
+            document.querySelectorAll('.delete-media-btn').forEach(btn => btn.addEventListener('click', e => {
+                const id = e.target.dataset.id;
+                mediaItems = mediaItems.filter(item => item.id !== id);
+                updateMediaTimeline();
+            }));
+
+            const containers = document.querySelectorAll('.media-item-container');
+            containers.forEach(container => {
+                container.addEventListener('dragstart', () => {
+                    draggedItemId = container.dataset.id;
+                    setTimeout(() => container.classList.add('dragging'), 0);
+                });
+                container.addEventListener('dragend', () => {
+                    container.classList.remove('dragging');
+                    draggedItemId = null;
+                });
+            });
+
+            mediaTimeline.addEventListener('dragover', e => {
+                e.preventDefault();
+                const afterElement = getDragAfterElement(mediaTimeline, e.clientY);
+                containers.forEach(c => c.classList.remove('drag-over'));
+                if (afterElement) afterElement.classList.add('drag-over');
+            });
+
+            mediaTimeline.addEventListener('drop', e => {
+                e.preventDefault();
+                const afterElement = getDragAfterElement(mediaTimeline, e.clientY);
+                containers.forEach(c => c.classList.remove('drag-over'));
+                
+                const draggedItemIndex = mediaItems.findIndex(item => item.id === draggedItemId);
+                const draggedItem = mediaItems.splice(draggedItemIndex, 1)[0];
+
+                if (afterElement == null) {
+                    mediaItems.push(draggedItem);
+                } else {
+                    const afterId = afterElement.dataset.id;
+                    const afterIndex = mediaItems.findIndex(item => item.id === afterId);
+                    mediaItems.splice(afterIndex, 0, draggedItem);
+                }
+                updateMediaTimeline();
+            });
+        }
+        
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.media-item-container:not(.dragging)')];
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        function updateLyricsTimeline() {
+            lyricsTimeline.innerHTML = '';
+            lyrics.forEach(lyric => {
+                const div = document.createElement('div');
+                const timeStr = `(${(lyric.time || 0).toFixed(2)}s)`;
+                div.className = 'flex items-center justify-between p-2 text-sm bg-gray-50 dark:bg-gray-700 rounded';
+                div.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <input type="color" data-id="${lyric.id}" value="${lyric.color}" class="lyric-color-picker p-0 h-5 w-5 block bg-white dark:bg-gray-700 border-none rounded-md cursor-pointer">
+                        <span>${timeStr}: "${lyric.text}"</span>
+                    </div>
+                    <button data-id="${lyric.id}" class="delete-lyric-btn text-red-500 hover:text-red-700 font-bold">X</button>
+                `;
+                lyricsTimeline.appendChild(div);
+            });
+
+            document.querySelectorAll('.delete-lyric-btn').forEach(btn => btn.addEventListener('click', e => {
+                const id = e.target.dataset.id;
+                lyrics = lyrics.filter(l => l.id !== id);
+                updateLyricsTimeline();
+            }));
+            
+            document.querySelectorAll('.lyric-color-picker').forEach(picker => picker.addEventListener('input', e => {
+                const id = e.target.dataset.id;
+                const lyric = lyrics.find(l => l.id === id);
+                if(lyric) lyric.color = e.target.value;
+            }));
+        }
+
+        function openCropper(id) {
+            currentCropItemId = id;
+            const item = mediaItems.find(i => i.id === id);
+            if (!item) return;
+
+            cropperImage.src = item.url;
+            cropperModal.classList.remove('hidden');
+
+            if (cropper) cropper.destroy();
+
+            cropper = new Cropper(cropperImage, {
+                aspectRatio: 9 / 16,
+                viewMode: 1,
+                background: false,
+                autoCropArea: 0.8,
+                zoomable: true,
+            });
+        }
+        
+        function saveCropData() {
+            const item = mediaItems.find(i => i.id === currentCropItemId);
+            if (item && cropper) {
+                const cropData = cropper.getData(true);
+                const { naturalWidth, naturalHeight } = cropperImage;
+
+                const xPercent = (cropData.x + cropData.width / 2) / naturalWidth * 100;
+                const yPercent = (cropData.y + cropData.height / 2) / naturalHeight * 100;
+
+                item.cropData = { objectPosition: `${xPercent.toFixed(2)}% ${yPercent.toFixed(2)}%` };
+            }
+            cropperModal.classList.add('hidden');
+            if(cropper) cropper.destroy();
+            cropper = null;
+        }
+
+        function handleAudioUpload(event) {
+            audioFile = event.target.files[0];
+            if (audioFile) {
+                const url = URL.createObjectURL(audioFile);
+                audioPlayer.src = url;
+            }
+        }
+
+        function handleLrcUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                parseLrc(content);
+            };
+            reader.readAsText(file);
+        }
+
+        function parseLrc(lrcContent) {
+            lyrics = []; // Clear existing lyrics
+            const lines = lrcContent.split('\n');
+            const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+            const defaultColor = '#FFFFFF';
+
+            lines.forEach(line => {
+                const match = line.match(timeRegex);
+                if (match) {
+                    const minutes = parseInt(match[1], 10);
+                    const seconds = parseInt(match[2], 10);
+                    const milliseconds = parseInt(match[3], 10);
+                    const time = minutes * 60 + seconds + milliseconds / 1000;
+                    const text = line.replace(timeRegex, '').trim();
+                    if (text) {
+                        lyrics.push({ id: `lrc-${Date.now()}-${Math.random()}`, text, time, color: defaultColor });
+                    }
+                }
+            });
+
+            lyrics.sort((a, b) => a.time - b.time);
+            updateLyricsTimeline();
+        }
+        
+        function updateLyricPlacement() {
+            const y = placementYSlider.value;
+            const x = placementXSlider.value;
+            lyricsOverlay.style.top = `${y}%`;
+            lyricsOverlay.style.left = `${x}%`;
+            lyricsOverlay.style.transform = `translate(-${x}%, -${y}%)`;
+        }
+
+        function playVideo() {
+            if (mediaItems.length === 0 || !audioFile) {
+                alert("Please upload media and an audio file to play.");
+                return;
+            }
+            
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            
+            videoContainer.innerHTML = ''; 
+            lyricsOverlay.textContent = ''; 
+            
+            const bpm = parseFloat(bpmInput.value) || 120;
+            const beatDurationSec = 60 / bpm;
+            
+            let cumulativeTime = 0;
+            const mediaTimeMap = mediaItems.map(item => {
+                const startTime = cumulativeTime;
+                const duration = item.duration * beatDurationSec;
+                cumulativeTime += duration;
+                return { startTime, endTime: startTime + duration, element: null };
+            });
+
+            mediaItems.forEach((item, index) => {
+                const tagName = item.type === 'image' ? 'img' : 'video';
+                const el = document.createElement(tagName);
+                el.src = item.url;
+                el.className = 'media-element';
+                
+                if (item.cropData && item.cropData.objectPosition) {
+                    el.style.objectPosition = item.cropData.objectPosition;
+                }
+                if (item.type === 'video') {
+                    el.muted = true;
+                    el.loop = true;
+                }
+                videoContainer.appendChild(el);
+                mediaTimeMap[index].element = el; 
+            });
+
+            let activeMediaIndex = -1;
+            const totalMediaDuration = mediaTimeMap.length > 0 ? mediaTimeMap[mediaTimeMap.length - 1].endTime : 0;
+
+            function playbackLoop() {
+                const currentTime = audioPlayer.currentTime;
+
+                const mediaTime = totalMediaDuration > 0 ? currentTime % totalMediaDuration : 0;
+                const newMediaIndex = mediaTimeMap.findIndex(item => mediaTime >= item.startTime && mediaTime < item.endTime);
+                
+                if (newMediaIndex !== activeMediaIndex && newMediaIndex !== -1) {
+                    if (activeMediaIndex !== -1 && mediaTimeMap[activeMediaIndex]) {
+                        mediaTimeMap[activeMediaIndex].element.classList.remove('active');
+                    }
+                    const newElement = mediaTimeMap[newMediaIndex].element;
+                    newElement.classList.add('active');
+                    if (newElement.tagName === 'VIDEO') {
+                        newElement.currentTime = 0;
+                        newElement.play();
+                    }
+                    activeMediaIndex = newMediaIndex;
+                }
+
+                let newLyric = null;
+                for (let i = lyrics.length - 1; i >= 0; i--) {
+                    if (currentTime >= lyrics[i].time) {
+                        newLyric = lyrics[i];
+                        break;
+                    }
+                }
+                
+                const newLyricText = newLyric ? newLyric.text : '';
+                if (lyricsOverlay.textContent !== newLyricText) {
+                    lyricsOverlay.textContent = newLyricText;
+                    lyricsOverlay.style.color = newLyric ? newLyric.color : '#FFFFFF';
+                }
+
+                if (!audioPlayer.paused && !audioPlayer.ended) {
+                    animationFrameId = requestAnimationFrame(playbackLoop);
+                } else {
+                    if (activeMediaIndex !== -1 && mediaTimeMap[activeMediaIndex]) {
+                         mediaTimeMap[activeMediaIndex].element.classList.remove('active');
+                    }
+                    lyricsOverlay.textContent = '';
+                }
+            }
+
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+            audioPlayer.play().then(() => {
+                updateLyricPlacement(); // Set initial placement
+                animationFrameId = requestAnimationFrame(playbackLoop);
+            }).catch(error => {
+                console.error("Playback failed:", error);
+                messageBox.textContent = "Error: Could not play audio.";
+            });
+        }
+
+        async function renderAndDownload() {
+            if (mediaItems.length === 0 || !audioFile) {
+                alert("Please upload media and an audio file to render.");
+                return;
+            }
+
+            renderBtn.disabled = true;
+            playBtn.disabled = true;
+            renderBtn.textContent = 'Working...';
+            
+            try {
+                await initializeFFmpeg();
+                
+                progressMessage.innerText = 'Writing files to memory...';
+                
+                const bpm = parseFloat(bpmInput.value) || 120;
+                const beatDurationSec = 60 / bpm;
+                
+                const inputs = [];
+                const filterComplex = [];
+                let outputStreams = '';
+                let cumulativeDuration = 0.0;
+
+                for (const [index, item] of mediaItems.entries()) {
+                    await ffmpeg.FS('writeFile', item.file.name, await fetchFile(item.file));
+                    
+                    const itemDuration = item.duration * beatDurationSec;
+                    
+                    if (item.type === 'image') {
+                        inputs.push('-loop', '1', '-t', String(itemDuration));
+                    }
+                     else if (item.type === 'video') {
+                        inputs.push('-t', String(itemDuration));
+                    }
+
+                    inputs.push('-i', item.file.name);
+
+                    const crop = item.cropData ? `crop=${item.cropData.width}:${item.cropData.height}:${item.cropData.x}:${item.cropData.y}` : 'crop=ih*(9/16):ih';
+                    filterComplex.push(`[${index}:v]${crop},scale=1080:1920,setsar=1[v${index}]`);
+                    outputStreams += `[v${index}]`;
+                    cumulativeDuration += itemDuration;
+                }
+                
+                await ffmpeg.FS('writeFile', audioFile.name, await fetchFile(audioFile));
+                
+                filterComplex.push(`${outputStreams}concat=n=${mediaItems.length}:v=1:a=0[outv]`);
+
+                const finalCommand = [
+                    ...inputs,
+                    '-i', audioFile.name,
+                    '-filter_complex', filterComplex.join(';'),
+                    '-map', '[outv]',
+                    '-map', `${mediaItems.length}:a`, 
+                    '-c:v', 'libx264',
+                    '-c:a', 'aac',
+                    '-pix_fmt', 'yuv420p',
+                    '-t', String(cumulativeDuration),
+                    '-shortest',
+                    'output.mp4'
+                ];
+
+                console.log("Running FFmpeg command:", finalCommand.join(' '));
+                
+                progressMessage.innerText = 'Rendering video... This may take a while.';
+                await ffmpeg.run(...finalCommand);
+                
+                progressMessage.innerText = 'Finalizing...';
+                const data = ffmpeg.FS('readFile', 'output.mp4');
+                
+                const videoBlob = new Blob([data.buffer], { type: 'video/mp4' });
+                const downloadUrl = URL.createObjectURL(videoBlob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'my-beat-synced-video.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(downloadUrl);
+                
+                progressContainer.classList.add('hidden');
+                messageBox.textContent = 'Download complete!';
+
+            } catch (error) {
+                console.error(error);
+                progressMessage.innerText = 'An error occurred. Check console for details.';
+            } finally {
+                renderBtn.disabled = false;
+                playBtn.disabled = false;
+                renderBtn.textContent = 'Render & Download';
+            }
+        }
+    </script>
+</body>
+</html>
